@@ -1,0 +1,6 @@
+{
+  "name": "Cotrix GST & Indian Accounting Enterprise",
+  "description": "Full-stack Indian GST Billing, Daily Shop-Closure Cash Reconciliation, Ledger Management, and Tax Compliance System powered by Neon PostgreSQL.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

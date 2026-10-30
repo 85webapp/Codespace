@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/* Mobile browser fixes: stop sideways scroll, stop auto text zoom, respect phone safe areas */
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+img, svg, video, canvas { max-width: 100%; }
+
+/* Responsive layout hardening */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { width: 100%; min-width: 0; }
+body { overflow-x: hidden; }
+button, input, select, textarea { max-width: 100%; }
+table { max-width: 100%; }
+/* Bottom bar / floating buttons sit above the phone's gesture bar */
+nav.fixed.bottom-0 { padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)); }
+
+
+@media print {
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  /* Remove overflow restrictions from modal parent containers during print */
+  .fixed, [class*="max-h-"], [class*="overflow-"] {
+    overflow: visible !important;
+    max-height: none !important;
+    position: static !important;
+  }
+  #printable-invoice, #printable-invoice * {
+    visibility: visible;
+  }
+  #printable-invoice {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 6mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+    color: black !important;
+  }
+  /* The on-screen "fit to phone width" scaling must never shrink the real print */
+  .invoice-fit-outer, .invoice-fit-inner {
+    transform: none !important;
+    width: auto !important;
+    height: auto !important;
+    box-shadow: none !important;
+  }
+  #printable-invoice[data-sheet-mode="thermal"] {
+    width: var(--cotrix-thermal-width, 80mm) !important;
+    max-width: var(--cotrix-thermal-width, 80mm) !important;
+    padding: 2mm !important;
+    margin: 0 !important;
+  }
+  #printable-invoice[data-sheet-mode="regular"] {
+    width: var(--cotrix-page-width, 210mm) !important;
+    max-width: var(--cotrix-page-width, 210mm) !important;
+    padding: 6mm !important;
+    margin: 0 !important;
+  }
+  #printable-invoice > * { break-inside: avoid; page-break-inside: avoid; }
+  #printable-invoice img { max-width: 100% !important; }
+  .html2pdf__page-break { break-after: page; page-break-after: always; height: 0; }
+}
+
+/* Cashier-only dark theme; administrator theme and preferences remain untouched. */
+html.cashier-dark body { background: #0f172a !important; color: #e2e8f0 !important; }
+html.cashier-dark #root { background: #0f172a; color: #e2e8f0; }
+html.cashier-dark .cashier-dark-surface { background: #111827; border-color: #334155; color: #e2e8f0; }
+
+html.cashier-dark #root > div { background-color: #0f172a !important; color: #e2e8f0 !important; }
+html.cashier-dark .bg-white { background-color: #111827 !important; }
+html.cashier-dark .bg-slate-50, html.cashier-dark .bg-slate-100 { background-color: #0f172a !important; }
+html.cashier-dark .text-slate-900, html.cashier-dark .text-slate-800, html.cashier-dark .text-slate-700 { color: #e2e8f0 !important; }
+html.cashier-dark .border-slate-100, html.cashier-dark .border-slate-200, html.cashier-dark .border-slate-300 { border-color: #334155 !important; }
