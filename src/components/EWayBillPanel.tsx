@@ -279,29 +279,15 @@ export const EWayBillPanel: React.FC<{ onBack?: () => void; companyGstin?: strin
         <div className="flex items-center gap-3">
           {onBack && <button onClick={onBack} className="p-2 rounded-xl hover:bg-white border border-transparent hover:border-slate-200"><ArrowLeft className="w-5 h-5" /></button>}
           <div><div className="flex items-center gap-2"><Truck className="w-5 h-5 text-blue-600" /><h1 className="text-xl font-black text-slate-900">E-Way Bills</h1></div><p className="text-xs text-slate-500 mt-1">Create, manage and export your saved e-Way Bill records.</p></div>
-          {exportBusy && (
-            <div role="status" aria-live="polite" className="fixed left-1/2 top-20 z-[80] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-xl">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Preparing {exportBusy === 'geojson' ? 'GeoJSON' : exportBusy.toUpperCase()}…
-            </div>
-          )}
-
-          {selected && (
-            <div className="fixed bottom-4 right-3 z-[70] flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl sm:right-6">
-              <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, false)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                Download GeoJSON
-              </button>
-              <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-[11px] font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-                {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
-                Share GeoJSON
-              </button>
-            </div>
-          )}
-        </div>;
-      };
-
-      function Detail({ label, value }: { label: string; value: string }) {
+        </div>
+        <div className="flex w-full items-center gap-2.5 sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:w-64">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search bill, document, GSTIN..." className="pl-9" />
+          </div>
+          <button type="button" onClick={() => { const nextForm = initialForm(); nextForm.from.gstin = companyGstin || ''; nextForm.from.legalName = companyName || ''; setForm(nextForm); setStep(1); setErrors([]); setWizardOpen(true); }} className="shrink-0 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-blue-700">
+            <Plus className="mr-1 inline h-4 w-4" /> New E-Way Bill
+          </button>
         </div>
       </div>
       {loadingBills && <div className="mb-4 rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs font-bold text-blue-700">Loading saved E-Way Bills...</div>}
@@ -315,6 +301,26 @@ export const EWayBillPanel: React.FC<{ onBack?: () => void; companyGstin?: strin
         {filtered.length === 0 ? <div className="py-20 text-center"><Truck className="w-10 h-10 mx-auto text-slate-300" /><h3 className="font-bold text-slate-800 mt-3">No e-Way Bills yet</h3><p className="text-xs text-slate-500 mt-1">Use the blue Add E-Way Bill button to create your first record.</p></div> : <div className="divide-y divide-slate-100">{filtered.map(b => <button key={b.id} onClick={() => setSelected(b)} className="w-full text-left p-4 hover:bg-blue-50/40 transition flex flex-col sm:flex-row sm:items-center gap-3 cursor-pointer"><div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0"><FileJson className="w-5 h-5" /></div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="font-black text-sm text-slate-900">{b.ewbNumber}</span><span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold">ACTIVE</span></div><div className="text-xs text-slate-500 mt-1">{docLabel(b.docType)} • {b.docNumber} • {b.docDate}</div></div><div className="sm:text-right"><div className="font-bold text-sm text-slate-800">{b.to.legalName || 'Recipient not named'}</div><div className="text-[11px] text-slate-500">{b.vehicleNo || 'No vehicle'} • {b.transDistance || 0} KM</div></div><ChevronRight className="w-4 h-4 text-slate-300" /></button>)}</div>}
       </div>
     </div>
+
+    {exportBusy && (
+      <div role="status" aria-live="polite" className="fixed left-1/2 top-20 z-[80] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-xl">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Preparing {exportBusy === 'geojson' ? 'GeoJSON' : exportBusy.toUpperCase()}…
+      </div>
+    )}
+
+    {selected && (
+      <div className="fixed bottom-4 right-3 z-[70] flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl sm:right-6">
+        <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, false)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+          {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+          Download GeoJSON
+        </button>
+        <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-[11px] font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+          {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
+          Share GeoJSON
+        </button>
+      </div>
+    )}
 
     {/* Floating Action Button: Centered, elevated above bottom navigation */}
     <div className="fixed bottom-24 sm:bottom-10 left-1/2 -translate-x-1/2 z-40 animate-in fade-in zoom-in duration-200">
