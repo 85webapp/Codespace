@@ -45,7 +45,7 @@ export interface ShareOptions {
   pendingTab?: Window | null;
 }
 
-export type ShareResult = 'shared' | 'cancelled' | 'downloaded';
+export type ShareResult = 'shared' | 'cancelled' | 'downloaded' | 'copied' | 'failed';
 
 /* ----------------------------- small toast ----------------------------- */
 
@@ -74,6 +74,26 @@ export const showToast: StatusFn = (message) => {
     if (toastEl) toastEl.style.display = 'none';
   }, 3500);
 };
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* Continue with the legacy browser fallback. */ }
+  if (typeof document === 'undefined') return false;
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+  (document.body || document.documentElement).appendChild(field);
+  field.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch { copied = false; }
+  field.remove();
+  return copied;
+}
 
 /* ------------------------ colour compatibility -------------------------- */
 /* html2canvas cannot parse modern CSS colours (oklch, oklab, color-mix ...)
@@ -257,28 +277,57 @@ export async function buildPdf(opts: BuildPdfOptions): Promise<Blob> {
 export async function buildPngBlob(element: HTMLElement, widthPx = 794): Promise<Blob> {
   const { host, clone } = await prepareClone(element, widthPx);
   try {
-    const render = html2pdf()
-      .set({ html2canvas: { scale: window.innerWidth < 640 ? 1.25 : 1.75, useCORS: true, allowTaint: false, backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0, windowWidth: widthPx } })
-      .from(clone)
+    const canvas = await renderElementCanvas(clone, widthPx);
+    return await canvasToPngBlob(canvas);
+  } finally { host.remove(); }
+}
+
+async function renderElementCanvas(element: HTMLElement, widthPx: number): Promise<HTMLCanvasElement> {
+  const scale = window.innerWidth < 640 ? 1.25 : 1.75;
+  try {
+    const html2canvas = (await import('html2canvas')).default;
+    return await withTimeout(html2canvas(element, {
+      scale,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#ffffff',
+      logging: false,
+      scrollX: 0,
+      scrollY: 0,
+      windowWidth: widthPx,
+    }), 35_000, 'Image rendering timed out. Please try again.');
+  } catch (error) {
+    console.warn('html2canvas failed; trying html2pdf canvas rendering.', error);
+    const fallback = html2pdf()
+      .set({ html2canvas: { scale, useCORS: true, allowTaint: false, backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0, windowWidth: widthPx } })
+      .from(element)
       .toCanvas()
       .get('canvas');
-    const canvas: HTMLCanvasElement = await withTimeout(render, 35_000, 'Image rendering timed out. Please try again.');
-    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('Unable to create the business card image.')), 'image/png'));
-    return blob;
-  } finally { host.remove(); }
+    return withTimeout(fallback, 35_000, 'Image rendering timed out. Please try again.');
+  }
+}
+
+async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  if (typeof canvas.toBlob === 'function') {
+    try {
+      return await withTimeout(new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG encoding failed.')), 'image/png');
+      }), 15_000, 'Image encoding timed out.');
+    } catch (error) {
+      console.warn('Canvas Blob encoding failed; trying data URL encoding.', error);
+    }
+  }
+  const dataUrl = canvas.toDataURL('image/png');
+  const response = await fetch(dataUrl);
+  if (!response.ok) throw new Error('Unable to encode image data.');
+  return response.blob();
 }
 
 /** Same clean render as the PDF, returned as a PNG data URL (legacy compatibility). */
 export async function buildPng(element: HTMLElement, widthPx = 794): Promise<string> {
   const { host, clone } = await prepareClone(element, widthPx);
   try {
-    const canvas: HTMLCanvasElement = await html2pdf()
-      .set({
-        html2canvas: { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff', logging: false, scrollX: 0, scrollY: 0, windowWidth: widthPx },
-      })
-      .from(clone)
-      .toCanvas()
-      .get('canvas');
+    const canvas = await renderElementCanvas(clone, widthPx);
     return canvas.toDataURL('image/png');
   } finally {
     host.remove();
@@ -302,22 +351,22 @@ const safeFileName = (name: string, extension = '') => {
  * that does nothing on phones. The delayed cleanup is intentionally shared by
  * every JSON/PDF export so all download buttons follow the same behavior.
  */
-export function downloadBlob(blob: Blob, fileName: string): void {
+export function downloadBlob(blob: Blob, fileName: string): boolean {
   const payload = blob.type ? blob : new Blob([blob], { type: 'application/octet-stream' });
   const safeName = safeFileName(fileName);
   if (typeof document === 'undefined') {
     showToast('Downloads are unavailable in this environment.');
-    return;
+    return false;
   }
   const fallbackToDataUrl = () => {
     if (typeof FileReader === 'undefined') {
       showToast('Download could not start because this browser does not support file downloads.');
-      return;
+      return false;
     }
     let reader: FileReader;
     try { reader = new FileReader(); } catch {
       showToast('The file could not be prepared for download.');
-      return;
+      return false;
     }
     reader.onload = () => {
       const dataUrl = typeof reader.result === 'string' ? reader.result : '';
@@ -348,25 +397,28 @@ export function downloadBlob(blob: Blob, fileName: string): void {
     };
     reader.onerror = () => showToast('The file could not be prepared for download.');
     try { reader.readAsDataURL(payload); } catch { showToast('The file could not be prepared for download.'); }
+    return true;
   };
   const legacyNavigator = typeof navigator !== 'undefined'
     ? navigator as Navigator & { msSaveOrOpenBlob?: (data: Blob, name: string) => boolean }
     : null;
   if (legacyNavigator?.msSaveOrOpenBlob) {
-    legacyNavigator.msSaveOrOpenBlob(payload, safeName);
-    return;
+    try {
+      legacyNavigator.msSaveOrOpenBlob(payload, safeName);
+      return true;
+    } catch { fallbackToDataUrl(); return true; }
   }
 
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
     fallbackToDataUrl();
-    return;
+    return true;
   }
   let objectUrl: string;
   try {
     objectUrl = URL.createObjectURL(payload);
   } catch {
     fallbackToDataUrl();
-    return;
+    return true;
   }
   const anchor = document.createElement('a');
   anchor.href = objectUrl;
@@ -387,7 +439,7 @@ export function downloadBlob(blob: Blob, fileName: string): void {
   } catch (error) {
     URL.revokeObjectURL(objectUrl);
     fallbackToDataUrl();
-    return;
+    return true;
   } finally {
     anchor.remove();
     // Do not revoke at 0ms: some mobile browsers begin reading the Blob later.
@@ -395,6 +447,7 @@ export function downloadBlob(blob: Blob, fileName: string): void {
     // to initialize, including larger invoice/report PDFs on slower phones.
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   }
+  return true;
 }
 
 export function downloadPdf(blob: Blob, fileName: string): void {
@@ -416,14 +469,67 @@ export async function shareJson(data: unknown, fileName: string, title: string, 
   return shareFile({ blob, fileName, title, text, mimeType: 'application/json', extension: '.json', onStatus });
 }
 
+export function downloadGeoJson(data: unknown, fileName: string): boolean {
+  const json = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  return downloadBlob(new Blob([json], { type: 'application/geo+json;charset=utf-8' }), safeFileName(fileName, '.geojson'));
+}
+
+export async function shareGeoJson(data: unknown, fileName: string, title: string, text: string, onStatus: StatusFn = showToast): Promise<ShareResult> {
+  const json = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  return shareFile({
+    blob: new Blob([json], { type: 'application/geo+json;charset=utf-8' }),
+    fileName,
+    title,
+    text,
+    mimeType: 'application/geo+json',
+    extension: '.geojson',
+    onStatus,
+  });
+}
+
 export const canNativeShareFiles = (file?: File): boolean => {
   if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') return false;
   if (!file) return false;
-  if (typeof navigator.canShare !== 'function') return false;
+  if (typeof navigator.canShare !== 'function') return true;
   try { return navigator.canShare({ files: [file] }); } catch { return false; }
 };
 
 export function openPendingTab(): Window | null { return null; }
+
+export function printElementFallback(element: HTMLElement | null, onStatus: StatusFn = showToast): boolean {
+  if (!element || typeof window.print !== 'function' || typeof document === 'undefined') {
+    onStatus('PDF generation failed and browser printing is unavailable.');
+    return false;
+  }
+  const printNode = element.id === 'printable-invoice' ? element : element.cloneNode(true) as HTMLElement;
+  const isClone = printNode !== element;
+  if (isClone) {
+    printNode.id = 'printable-invoice';
+    printNode.setAttribute('data-sheet-mode', 'regular');
+    printNode.setAttribute('data-print-fallback', 'true');
+    printNode.querySelectorAll('[data-pdf-ignore], button').forEach((node) => node.remove());
+    document.body.appendChild(printNode);
+  }
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    window.removeEventListener('afterprint', cleanup);
+    if (isClone) printNode.remove();
+  };
+  window.addEventListener('afterprint', cleanup, { once: true });
+  window.setTimeout(cleanup, 120_000);
+  onStatus('PDF export failed. Use “Save as PDF” in the print dialog.');
+  try {
+    window.print();
+    return true;
+  } catch (error) {
+    cleanup();
+    console.error('Browser print fallback failed:', error);
+    onStatus('PDF export and browser print fallback both failed.');
+    return false;
+  }
+}
 
 export interface ShareFileOptions {
   blob: Blob;
@@ -461,9 +567,27 @@ export async function shareFile(opts: ShareFileOptions): Promise<ShareResult> {
     }
   }
 
-  downloadBlob(blob, fileName);
-  status('File sharing is unavailable or failed. The file download has started.');
-  return 'downloaded';
+  const downloaded = downloadBlob(blob, fileName);
+  if (downloaded) {
+    status('File sharing is unavailable. A file download was started.');
+    return 'downloaded';
+  }
+  try {
+    const dataUrl = await withTimeout(new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('File conversion failed.'));
+      reader.onerror = () => reject(new Error('File conversion failed.'));
+      reader.readAsDataURL(blob);
+    }), 15_000, 'File conversion timed out.');
+    if (await copyTextToClipboard(dataUrl)) {
+      status('File download is unavailable. File data URL copied successfully.');
+      return 'copied';
+    }
+  } catch (error) {
+    console.warn('File-to-clipboard fallback failed.', error);
+  }
+  status('Sharing, download, and clipboard are unavailable in this browser.');
+  return 'failed';
 }
 
 export async function sharePdf(opts: ShareOptions): Promise<ShareResult> {
@@ -557,7 +681,7 @@ export async function runReportExport(
     await sharePdf({ blob, fileName, title, text, onStatus });
   } catch (err) {
     console.error('Report export failed:', err);
-    onStatus('PDF could not be created. Please try again.');
+    printElementFallback(root, onStatus);
   }
 }
 

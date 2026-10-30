@@ -5,7 +5,7 @@ import {
   ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Download, FileJson, Plus,
   Search, Truck, X, CheckCircle2, AlertCircle, MapPin, Package, CalendarDays, Share2, Loader2,
 } from 'lucide-react';
-import { buildDetailsPdfBlob, downloadDetailsPdf, downloadJson, shareJson, sharePdf, showToast } from '../utils/pdfShare';
+import { buildDetailsPdfBlob, downloadDetailsPdf, downloadGeoJson, downloadJson, shareGeoJson, shareJson, sharePdf, showToast } from '../utils/pdfShare';
 
 const STATE_CODES = [
   ['01','Jammu & Kashmir'],['02','Himachal Pradesh'],['03','Punjab'],['04','Chandigarh'],['05','Uttarakhand'],['06','Haryana'],['07','Delhi'],['08','Rajasthan'],['09','Uttar Pradesh'],['10','Bihar'],['11','Sikkim'],['12','Arunachal Pradesh'],['13','Nagaland'],['14','Manipur'],['15','Mizoram'],['16','Tripura'],['17','Meghalaya'],['18','Assam'],['19','West Bengal'],['20','Jharkhand'],['21','Odisha'],['22','Chhattisgarh'],['23','Madhya Pradesh'],['24','Gujarat'],['25','Daman & Diu'],['26','Dadra & Nagar Haveli and Daman & Diu'],['27','Maharashtra'],['28','Andhra Pradesh'],['29','Karnataka'],['30','Goa'],['31','Lakshadweep'],['32','Kerala'],['33','Tamil Nadu'],['34','Puducherry'],['35','Andaman & Nicobar Islands'],['36','Telangana'],['37','Andhra Pradesh'],['38','Ladakh'],['97','Other Territory']
@@ -101,7 +101,7 @@ export const EWayBillPanel: React.FC<{ onBack?: () => void; companyGstin?: strin
   const [form, setForm] = useState(initialForm);
   const [selected, setSelected] = useState<EWayBill | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
-  const [exportBusy, setExportBusy] = useState<'pdf' | 'json' | null>(null);
+  const [exportBusy, setExportBusy] = useState<'pdf' | 'json' | 'geojson' | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -205,6 +205,43 @@ export const EWayBillPanel: React.FC<{ onBack?: () => void; companyGstin?: strin
     } finally { setExportBusy(null); }
   };
 
+  const handleExportGeoJson = async (b: EWayBill, share: boolean) => {
+    if (exportBusy) return;
+    setExportBusy('geojson');
+    try {
+      const locationFeature = (role: 'origin' | 'destination', party: PartyForm) => ({
+        type: 'Feature' as const,
+        geometry: null,
+        properties: {
+          role,
+          billNumber: b.ewbNumber,
+          documentNumber: b.docNumber,
+          name: party.legalName,
+          tradeName: party.tradeName || null,
+          gstin: party.gstin || 'URP',
+          address: [party.addr1, party.addr2, party.city].filter(Boolean).join(', '),
+          pincode: party.pincode || null,
+          stateCode: party.stateCode || null,
+          coordinatesAvailable: false,
+        },
+      });
+      const geoJson = {
+        type: 'FeatureCollection',
+        name: `E-Way Bill ${b.ewbNumber}`,
+        features: [locationFeature('origin', b.from), locationFeature('destination', b.to)],
+      };
+      const fileName = `EWB_${b.ewbNumber}.geojson`;
+      if (share) await shareGeoJson(geoJson, fileName, `E-Way Bill ${b.ewbNumber}`, 'Origin and destination address data. Coordinates are not included.');
+      else {
+        downloadGeoJson(geoJson, fileName);
+        showToast('GeoJSON download started. Addresses are included; coordinates are not available.');
+      }
+    } catch (error) {
+      console.error('E-Way Bill GeoJSON export failed:', error);
+      showToast('GeoJSON export failed. Please try again.');
+    } finally { setExportBusy(null); }
+  };
+
   const handleExportPdf = async (b: EWayBill, share = false) => {
     if (exportBusy) return;
     setExportBusy('pdf');
@@ -242,10 +279,29 @@ export const EWayBillPanel: React.FC<{ onBack?: () => void; companyGstin?: strin
         <div className="flex items-center gap-3">
           {onBack && <button onClick={onBack} className="p-2 rounded-xl hover:bg-white border border-transparent hover:border-slate-200"><ArrowLeft className="w-5 h-5" /></button>}
           <div><div className="flex items-center gap-2"><Truck className="w-5 h-5 text-blue-600" /><h1 className="text-xl font-black text-slate-900">E-Way Bills</h1></div><p className="text-xs text-slate-500 mt-1">Create, manage and export your saved e-Way Bill records.</p></div>
-        </div>
-        <div className="flex items-center gap-2.5 w-full sm:w-auto">
-          <div className="relative flex-1 sm:w-64"><Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" /><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search bill, document, GSTIN..." className="pl-9" /></div>
-          <button onClick={() => { const f = initialForm(); f.from.gstin = companyGstin || ''; f.from.legalName = companyName || ''; setForm(f); setStep(1); setErrors([]); setWizardOpen(true); }} className="shrink-0 hidden sm:flex items-center gap-1.5 rounded-xl bg-blue-600 text-white px-4 py-2.5 font-bold text-xs shadow-md hover:bg-blue-700 active:scale-95 transition"><Plus className="w-4 h-4" /> New E-Way Bill</button>
+          {exportBusy && (
+            <div role="status" aria-live="polite" className="fixed left-1/2 top-20 z-[80] flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-xl">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Preparing {exportBusy === 'geojson' ? 'GeoJSON' : exportBusy.toUpperCase()}…
+            </div>
+          )}
+
+          {selected && (
+            <div className="fixed bottom-4 right-3 z-[70] flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-xl sm:right-6">
+              <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, false)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                Download GeoJSON
+              </button>
+              <button type="button" disabled={!!exportBusy} onClick={() => void handleExportGeoJson(selected, true)} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3 py-2 text-[11px] font-bold text-white hover:bg-blue-800 disabled:opacity-50">
+                {exportBusy === 'geojson' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
+                Share GeoJSON
+              </button>
+            </div>
+          )}
+        </div>;
+      };
+
+      function Detail({ label, value }: { label: string; value: string }) {
         </div>
       </div>
       {loadingBills && <div className="mb-4 rounded-xl bg-blue-50 border border-blue-100 p-3 text-xs font-bold text-blue-700">Loading saved E-Way Bills...</div>}

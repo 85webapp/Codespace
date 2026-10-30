@@ -68,17 +68,23 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   // View tabs: 'categories' | 'items' (matching video 00:08 - 00:09)
   const [activeTab, setActiveTab] = useState<'categories' | 'items'>('categories');
   const [isAddFormOpen, setIsAddFormOpen] = useState(initialAddOpen);
+  const [isPermanentManagerOpen, setIsPermanentManagerOpen] = useState(false);
   const [isPermanentFormOpen, setIsPermanentFormOpen] = useState(false);
+  const [editingPermanentId, setEditingPermanentId] = useState<string | null>(null);
   const [permanentTitle, setPermanentTitle] = useState('');
+  const [permanentDescription, setPermanentDescription] = useState('');
+  const [permanentNote, setPermanentNote] = useState('');
   const [permanentAmount, setPermanentAmount] = useState('');
   const [permanentCategory, setPermanentCategory] = useState('Rent');
+  const [permanentPaymentMode, setPermanentPaymentMode] = useState('CASH');
+  const [permanentDuration, setPermanentDuration] = useState<'7' | '14' | 'permanent'>('permanent');
 
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
 
   // Live Expenses Data
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [permanentExpenses, setPermanentExpenses] = useState<Array<{ id: string; title: string; category: string; amount: string | number; active: boolean }>>([]);
+  const [permanentExpenses, setPermanentExpenses] = useState<Array<{ id: string; title: string; description?: string; notes?: string; category: string; amount: string | number; payment_mode: string; active: boolean; start_date: string; end_date?: string | null; duration_days?: number | null }>>([]);
   const [overallTotal, setOverallTotal] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -139,16 +145,29 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      const res = await apiFetch('/api/permanent-expenses', {
-        method: 'POST',
+      const durationDays = permanentDuration === 'permanent' ? null : Number(permanentDuration);
+      const res = await apiFetch(editingPermanentId ? `/api/permanent-expenses/${editingPermanentId}` : '/api/permanent-expenses', {
+        method: editingPermanentId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: permanentTitle.trim(), amount, category: permanentCategory }),
+        body: JSON.stringify({
+          title: permanentTitle.trim(),
+          description: permanentDescription.trim(),
+          notes: permanentNote.trim(),
+          amount,
+          category: permanentCategory,
+          payment_mode: permanentPaymentMode,
+          duration_days: durationDays,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to save permanent expense.');
       setPermanentTitle('');
+      setPermanentDescription('');
+      setPermanentNote('');
       setPermanentAmount('');
+      setEditingPermanentId(null);
       setIsPermanentFormOpen(false);
+      setIsPermanentManagerOpen(true);
       await Promise.all([loadExpenses(), loadPermanentExpenses()]);
       onExpenseAdded?.();
     } catch (err: any) {
@@ -158,8 +177,22 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     }
   };
 
-  const handleDisablePermanentExpense = async (id: string) => {
-    if (!window.confirm('Stop posting this permanent expense? Existing entries will remain.')) return;
+  const openPermanentForm = (expense?: (typeof permanentExpenses)[number]) => {
+    setErrorMsg(null);
+    setEditingPermanentId(expense?.id || null);
+    setPermanentTitle(expense?.title || '');
+    setPermanentDescription(expense?.description || '');
+    setPermanentNote(expense?.notes || '');
+    setPermanentAmount(expense ? String(expense.amount) : '');
+    setPermanentCategory(expense?.category || 'Rent');
+    setPermanentPaymentMode(expense?.payment_mode || 'CASH');
+    setPermanentDuration(expense?.duration_days === 7 ? '7' : expense?.duration_days === 14 ? '14' : 'permanent');
+    setIsPermanentManagerOpen(false);
+    setIsPermanentFormOpen(true);
+  };
+
+  const handleDeletePermanentExpense = async (id: string) => {
+    if (!window.confirm('Delete this recurring expense? Previously posted ledger entries will remain.')) return;
     try {
       const res = await apiFetch(`/api/permanent-expenses/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -167,7 +200,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         onExpenseAdded?.();
       }
     } catch (err) {
-      console.error('Failed to disable permanent expense:', err);
+      console.error('Failed to delete permanent expense:', err);
     }
   };
 
@@ -317,33 +350,11 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         {/* Total Summary Row (Matching Video 00:09) */}
         <div className="flex items-center justify-between gap-2 py-2 px-4 text-xs shrink-0">
           <span className="text-slate-500 font-medium">Total: <b className="font-mono text-blue-600">{formatCurrency(overallTotal, settings.currency)}</b></span>
-          <button type="button" onClick={() => { setErrorMsg(null); setIsPermanentFormOpen(true); }} className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 font-semibold text-emerald-800 hover:bg-emerald-100">
-            <Repeat className="h-3.5 w-3.5" />
-            <span>Add Permanent Expense</span>
-          </button>
         </div>
 
         {/* Body Content */}
         <div className="flex-1 overflow-y-auto px-4 pb-28 space-y-2">
 
-          {permanentExpenses.some((expense) => expense.active) && (
-            <section className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
-              <h2 className="flex items-center gap-2 text-xs font-bold text-emerald-900"><Repeat className="h-4 w-4" /> Permanent Expenses</h2>
-              {permanentExpenses.filter((expense) => expense.active).map((expense) => (
-                <div key={expense.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-slate-900">{expense.title}</p>
-                    <p className="text-[10px] text-slate-500">{expense.category} · daily</p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-xs font-bold text-slate-800">{formatCurrency(expense.amount, settings.currency)}</span>
-                    <button type="button" aria-label={`Stop ${expense.title}`} onClick={() => handleDisablePermanentExpense(expense.id)} className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><Trash2 className="h-3.5 w-3.5" /></button>
-                  </div>
-                </div>
-              ))}
-            </section>
-          )}
-          
           {/* TAB 1: CATEGORIES (Exact list from video 00:09) */}
           {activeTab === 'categories' && (
             <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs overflow-hidden">
@@ -403,14 +414,23 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
         </div>
 
-        {/* Floating Action Button: + Add Expenses (Centered, Blue Theme) */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30">
+        {/* Expense actions */}
+        <div className="absolute bottom-5 left-3 right-3 z-30 mx-auto grid max-w-md grid-cols-2 gap-2">
           <button
-            onClick={() => setIsAddFormOpen(true)}
-            className="flex items-center gap-2 px-7 py-3 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider shadow-xl shadow-blue-600/35 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+            type="button"
+            onClick={() => setIsPermanentManagerOpen(true)}
+            className="flex min-w-0 items-center justify-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-3 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100"
           >
-            <Plus className="w-4 h-4" />
-            <span>Add Expenses</span>
+            <Repeat className="h-4 w-4 shrink-0" />
+            <span>Permanent Expense</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsAddFormOpen(true)}
+            className="flex min-w-0 items-center justify-center gap-1.5 rounded-full bg-blue-600 px-2 py-3 text-[11px] font-bold text-white shadow-lg shadow-blue-600/25 hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4 shrink-0" />
+            <span>Add Expense</span>
           </button>
         </div>
 
@@ -531,12 +551,45 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
           </div>
         )}
 
-        {isPermanentFormOpen && (
+        {isPermanentManagerOpen && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-3 backdrop-blur-xs">
+            <section className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-xl bg-white shadow-2xl">
+              <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <h2 className="flex items-center gap-2 text-base font-bold text-slate-900"><Repeat className="h-4 w-4 text-emerald-700" /> Permanent Expenses</h2>
+                <button type="button" aria-label="Close permanent expenses" onClick={() => setIsPermanentManagerOpen(false)} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100">×</button>
+              </header>
+              <div className="flex-1 space-y-2 overflow-y-auto p-4">
+                {permanentExpenses.filter((expense) => expense.active).length === 0 ? (
+                  <p className="py-8 text-center text-xs text-slate-500">No permanent expenses have been added.</p>
+                ) : permanentExpenses.filter((expense) => expense.active).map((expense) => (
+                  <article key={expense.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">{expense.title}</p>
+                      <p className="truncate text-[11px] text-slate-500">{expense.description || expense.category} · {expense.category}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-emerald-800">
+                        {formatCurrency(expense.amount, settings.currency)} · {expense.duration_days === 7 ? '1 week' : expense.duration_days === 14 ? '2 weeks' : 'Permanent'}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button type="button" aria-label={`Edit ${expense.title}`} onClick={() => openPermanentForm(expense)} className="rounded-md px-2.5 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50">Edit</button>
+                      <button type="button" aria-label={`Delete ${expense.title}`} onClick={() => void handleDeletePermanentExpense(expense.id)} className="rounded-md p-2 text-rose-600 hover:bg-rose-50"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <footer className="flex justify-end border-t border-slate-200 p-3">
+                <button type="button" onClick={() => openPermanentForm()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800"><Plus className="h-4 w-4" /> Add Permanent Expense</button>
+              </footer>
+            </section>
+          </div>
+        )}
+
+        {isPermanentFormOpen && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-3 backdrop-blur-xs">
             <form onSubmit={handleSavePermanentExpense} className="w-full max-w-md space-y-4 rounded-xl bg-white p-5 shadow-2xl">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="flex items-center gap-2 text-base font-bold text-slate-900"><Repeat className="h-4 w-4 text-emerald-700" /> Add Permanent Expense</h3>
-                <button type="button" aria-label="Close permanent expense form" onClick={() => setIsPermanentFormOpen(false)} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100">×</button>
+                <h3 className="flex items-center gap-2 text-base font-bold text-slate-900"><Repeat className="h-4 w-4 text-emerald-700" /> {editingPermanentId ? 'Edit Permanent Expense' : 'Add Permanent Expense'}</h3>
+                <button type="button" aria-label="Close permanent expense form" onClick={() => { setIsPermanentFormOpen(false); setIsPermanentManagerOpen(true); }} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100">×</button>
               </div>
               {errorMsg && <p role="alert" className="rounded-lg bg-rose-50 p-2.5 text-xs text-rose-700">{errorMsg}</p>}
               <label className="block text-xs font-semibold text-slate-700">Expense Name
@@ -545,14 +598,38 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
               <label className="block text-xs font-semibold text-slate-700">Amount
                 <IndianAmountInput required min="0.01" value={permanentAmount} onValueChange={setPermanentAmount} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900" />
               </label>
+              <label className="block text-xs font-semibold text-slate-700">Description / Item
+                <input maxLength={256} value={permanentDescription} onChange={(e) => setPermanentDescription(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900" />
+              </label>
+              <label className="block text-xs font-semibold text-slate-700">Note (Optional)
+                <input maxLength={500} value={permanentNote} onChange={(e) => setPermanentNote(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900" />
+              </label>
               <label className="block text-xs font-semibold text-slate-700">Category
                 <select value={permanentCategory} onChange={(e) => setPermanentCategory(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900">
                   {EXPENSE_CATEGORIES.map((category) => <option key={category.name} value={category.name}>{category.name}</option>)}
                 </select>
               </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold text-slate-700">Start Date
+                  <input readOnly value={new Date().toLocaleDateString('en-GB')} className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500" />
+                </label>
+                <label className="block text-xs font-semibold text-slate-700">Duration
+                  <select value={permanentDuration} onChange={(e) => setPermanentDuration(e.target.value as '7' | '14' | 'permanent')} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900">
+                    <option value="permanent">Permanent</option>
+                    <option value="7">1 week</option>
+                    <option value="14">2 weeks</option>
+                  </select>
+                </label>
+              </div>
+              <div>
+                <p className="mb-1.5 text-xs font-semibold text-slate-700">Payment Type</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {PAYMENT_MODES.map((mode) => <button key={mode.id} type="button" onClick={() => setPermanentPaymentMode(mode.id.toUpperCase())} className={`rounded-lg border px-2 py-2 text-xs font-bold ${permanentPaymentMode === mode.id.toUpperCase() ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{mode.label}</button>)}
+                </div>
+              </div>
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
-                <button type="button" onClick={() => setIsPermanentFormOpen(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700">Cancel</button>
-                <button type="submit" disabled={isSubmitting} className="rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{isSubmitting ? 'Saving...' : 'Save Permanent Expense'}</button>
+                <button type="button" onClick={() => { setIsPermanentFormOpen(false); setIsPermanentManagerOpen(true); }} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700">Cancel</button>
+                <button type="submit" disabled={isSubmitting} className="rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{isSubmitting ? 'Saving...' : editingPermanentId ? 'Save Changes' : 'Save Expense'}</button>
               </div>
             </form>
           </div>

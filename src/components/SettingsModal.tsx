@@ -316,10 +316,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <ChevronRight className="w-4 h-4 text-slate-400" />
           </button>
 
-          {/* Cashier access is a settings feature, not an About Us feature. */}
           {currentUser && currentUser.role !== 'CASHIER' && onOpenCashierLink && (
-            <button type="button" onClick={() => openAndClose(onOpenCashierLink)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-blue-300 hover:bg-blue-50/40">
-              <span><span className="block text-sm font-bold text-slate-900">Cashier Link & Access</span><span className="mt-1 block text-xs text-slate-500">Create and manage cashier access for this business.</span></span><ChevronRight className="h-4 w-4 shrink-0 text-blue-600" />
+            <button type="button" onClick={() => openAndClose(onOpenCashierLink)} className="w-full p-3.5 rounded-xl border border-slate-200 bg-white hover:border-blue-400 hover:bg-blue-50/40 flex items-center justify-between text-left transition-all cursor-pointer">
+              <span className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <User className="w-4 h-4 text-blue-600" />
+                Cashier Link & Access
+              </span>
+              <ChevronRight className="w-4 h-4 text-slate-400" />
             </button>
           )}
 

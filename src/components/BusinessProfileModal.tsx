@@ -1,6 +1,7 @@
 import { apiFetch } from '../utils/api';
 import React, { useState, useRef, useEffect } from 'react';
-import { buildPngBlob, downloadBlob, shareFile } from '../utils/pdfShare';
+import { buildPngBlob, downloadBlob, printElementFallback, shareFile } from '../utils/pdfShare';
+import { shareTextOrLink } from '../utils/shareUtils';
 import { playSuccessTone, triggerHaptic } from '../utils/feedback';
 import { IndianAmountInput } from './IndianAmountInput';
 import {
@@ -102,6 +103,10 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
   const isUserModifiedRef = useRef(false);
   const hydratedForOpenRef = useRef(false);
   const previousCompletionRef = useRef(0);
+
+  useEffect(() => {
+    if (isOpen) setActiveTab('basic');
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -376,7 +381,41 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
       });
     } catch (err) {
       console.error('Business card image share failed:', err);
-      setCardStatus('Could not create the visiting card image. Please check the logo/image and try again.');
+      try {
+        const result = await shareTextOrLink({
+          title: tradeName || 'Business Profile',
+          text: [tradeName, gstin ? `GSTIN: ${gstin}` : '', phone1 ? `Phone: ${phone1}` : '', email ? `Email: ${email}` : '', address].filter(Boolean).join('\n'),
+          onStatus: (message) => { if (message) { setCardStatus(message); setShareToast(true); window.setTimeout(() => setShareToast(false), 3500); } },
+        });
+        if (result === 'copied') setCardStatus('Card image unavailable. Profile details were copied instead.');
+      } catch {
+        setCardStatus('Card image and profile sharing are unavailable in this browser.');
+        setShareToast(true);
+        window.setTimeout(() => setShareToast(false), 3500);
+      }
+    } finally { setCardBusy(false); }
+  };
+
+  const handleShareProfile = async () => {
+    if (cardBusy) return;
+    setCardBusy(true);
+    try {
+      const details = [
+        tradeName,
+        gstin ? `GSTIN: ${gstin}` : '',
+        phone1 ? `Phone: ${phone1}` : '',
+        phone2 ? `Phone 2: ${phone2}` : '',
+        email ? `Email: ${email}` : '',
+        address,
+      ].filter(Boolean).join('\n');
+      await shareTextOrLink({
+        title: tradeName || 'Business Profile',
+        text: details || 'Business profile',
+        onStatus: (message) => { if (message) { setCardStatus(message); setShareToast(true); window.setTimeout(() => setShareToast(false), 3500); } },
+      });
+    } catch (err) {
+      console.error('Profile sharing failed:', err);
+      setCardStatus('Profile could not be shared or copied.');
       setShareToast(true);
       window.setTimeout(() => setShareToast(false), 3500);
     } finally { setCardBusy(false); }
@@ -396,9 +435,15 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
       window.setTimeout(() => setShareToast(false), 3500);
     } catch (err) {
       console.error('Business card image download failed:', err);
-      setCardStatus('Could not create the visiting card image. Please try again.');
-      setShareToast(true);
-      window.setTimeout(() => setShareToast(false), 3500);
+      if (!printElementFallback(card, (message) => {
+        setCardStatus(message);
+        setShareToast(true);
+        window.setTimeout(() => setShareToast(false), 5000);
+      })) {
+        setCardStatus('Image export and print fallback both failed.');
+        setShareToast(true);
+        window.setTimeout(() => setShareToast(false), 3500);
+      }
     } finally { setCardBusy(false); }
   };
 
@@ -468,6 +513,10 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button type="button" onClick={handleShareProfile} disabled={cardBusy} title="Share business profile details" className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50">
+              {cardBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
+              <span>Share Profile</span>
+            </button>
             <button type="button" onClick={handleDownloadCard} disabled={cardBusy} title="Download visiting card as PNG" className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold disabled:opacity-50">{cardBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{cardBusy ? 'Preparing…' : 'Download Image'}</button>
             <button type="button" onClick={handleShareCard} disabled={cardBusy} title="Share Visiting Card" className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 transition-colors disabled:opacity-50">
               {cardBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
@@ -609,11 +658,16 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
             </div>
           </div>
 
-          {/* Unified profile form: keep business fields on the same page to avoid the blank split-tab screen. */}
-          <div className="mb-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">Basic & Business Details</div>
+          <div role="tablist" aria-label="Profile details" className="mb-3 grid grid-cols-2 border-b border-slate-200">
+            <button type="button" role="tab" aria-selected={activeTab === 'basic'} onClick={() => setActiveTab('basic')} className={`border-b-2 px-3 py-3 text-sm font-bold transition-colors ${activeTab === 'basic' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+              Basic Details
+            </button>
+            <button type="button" role="tab" aria-selected={activeTab === 'business'} onClick={() => setActiveTab('business')} className={`border-b-2 px-3 py-3 text-sm font-bold transition-colors ${activeTab === 'business' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>
+              Business Details
+            </button>
+          </div>
 
-          {/* TAB 1: BASIC DETAILS (matches Screenshot 3 & 4) */}
-          {true && (
+          {activeTab === 'basic' && (
             <div className="space-y-3.5 pt-1 text-xs">
               
               {/* Business Name */}
@@ -798,8 +852,7 @@ export const BusinessProfileModal: React.FC<BusinessProfileModalProps> = ({
             </div>
           )}
 
-          {/* Business details are integrated into the same profile page. */}
-          {true && (
+          {activeTab === 'business' && (
             <div className="space-y-4 border-t border-slate-200 pt-4 text-xs">
               <h3 className="text-sm font-black text-slate-800">Business Details</h3>
               

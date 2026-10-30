@@ -26,6 +26,7 @@ import {
   shareFile,
   sharePdf,
   shareJson,
+  printElementFallback,
 } from '../utils/pdfShare';
 import { Invoice, CompanyProfile, AppSettings } from '../types';
 import { formatCurrency, formatDate } from '../utils/formatters';
@@ -232,7 +233,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       flash('\u2713 PDF downloaded successfully!');
     } catch (err) {
       console.error('PDF export failed:', err);
-      flash('PDF could not be created. Please try again.', 4000);
+      printElementFallback(document.getElementById('printable-invoice'), (message) => flash(message, 6000));
     } finally {
       setIsExporting(false);
     }
@@ -262,7 +263,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       });
     } catch (err) {
       console.error('Share failed:', err);
-      flash('Could not prepare the PDF. Please try again.', 4000);
+      printElementFallback(document.getElementById('printable-invoice'), (message) => flash(message, 6000));
     } finally {
       setIsExporting(false);
     }
@@ -291,7 +292,17 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       }
     } catch (err) {
       console.error('Invoice image export failed:', err);
-      flash('Invoice image could not be created. Please use Download PDF or try again.', 4000);
+      try {
+        const pdf = await getPdfBlob();
+        if (share) {
+          await sharePdf({ blob: pdf, fileName: pdfFileName, title: `Invoice ${invoice.invoice_number}`, text: `Invoice ${invoice.invoice_number}`, onStatus: (message) => flash(message, 5000) });
+        } else {
+          downloadPdf(pdf, pdfFileName);
+          flash('Image export failed. PDF download started instead.', 5000);
+        }
+      } catch {
+        printElementFallback(document.getElementById('printable-invoice'), (message) => flash(message, 6000));
+      }
     } finally { setIsExporting(false); }
   };
 

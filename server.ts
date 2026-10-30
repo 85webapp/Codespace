@@ -301,13 +301,20 @@ async function initRelationalTables() {
         id VARCHAR(64) PRIMARY KEY,
         user_mobile VARCHAR(32) NOT NULL,
         title VARCHAR(128) NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
         category VARCHAR(64) NOT NULL,
         amount NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
         payment_mode VARCHAR(32) NOT NULL DEFAULT 'CASH',
         active BOOLEAN NOT NULL DEFAULT TRUE,
         start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        end_date DATE,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE permanent_expenses ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+      ALTER TABLE permanent_expenses ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+      ALTER TABLE permanent_expenses ADD COLUMN IF NOT EXISTS end_date DATE;
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_recurring_occurrence
         ON expenses (recurring_expense_id, recurrence_date)
@@ -930,9 +937,11 @@ export async function getApp(): Promise<express.Express> {
     try {
       const current = new Date();
       const todayIso = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`;
+      await pool.query(`UPDATE permanent_expenses SET active=FALSE WHERE active=TRUE AND end_date < CURRENT_DATE`);
       const templates = await pool.query(
-        `SELECT id,user_mobile,title,category,amount,payment_mode,start_date
-         FROM permanent_expenses WHERE active=TRUE AND ($1::text IS NULL OR user_mobile=$1)`,
+        `SELECT id,user_mobile,title,description,notes,category,amount,payment_mode,start_date,end_date
+         FROM permanent_expenses WHERE active=TRUE AND (end_date IS NULL OR end_date >= CURRENT_DATE)
+           AND ($1::text IS NULL OR user_mobile=$1)`,
         [userMobile || null]
       );
 
@@ -940,7 +949,10 @@ export async function getApp(): Promise<express.Express> {
         let occurrenceIso = template.start_date instanceof Date
           ? template.start_date.toISOString().slice(0, 10)
           : String(template.start_date).slice(0, 10);
-        while (occurrenceIso <= todayIso) {
+        const endIso = template.end_date instanceof Date
+          ? template.end_date.toISOString().slice(0, 10)
+          : template.end_date ? String(template.end_date).slice(0, 10) : null;
+        while (occurrenceIso <= todayIso && (!endIso || occurrenceIso <= endIso)) {
           const expenseDate = getFormattedDate(new Date(`${occurrenceIso}T12:00:00`));
           const amount = Number(template.amount);
           const mode = String(template.payment_mode || 'CASH').toUpperCase();
@@ -952,10 +964,10 @@ export async function getApp(): Promise<express.Express> {
             await client.query('BEGIN');
             const inserted = await client.query(
               `INSERT INTO expenses (id,user_mobile,expense_no,date,category,title,amount,payment_mode,paid_to,notes,recurring_expense_id,recurrence_date,created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'','Permanent daily expense',$9,$10,NOW())
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'',$11,$9,$10,NOW())
                ON CONFLICT (recurring_expense_id,recurrence_date) WHERE recurring_expense_id IS NOT NULL DO NOTHING
                RETURNING id`,
-              [expenseId, template.user_mobile, expenseNo, expenseDate, template.category, template.title, amount, mode, template.id, occurrenceIso]
+              [expenseId, template.user_mobile, expenseNo, expenseDate, template.category, template.title, amount, mode, template.id, occurrenceIso, [template.description, template.notes].filter(Boolean).join(' - ') || 'Recurring expense']
             );
             if (inserted.rowCount) {
               const lines = [
@@ -3548,7 +3560,8 @@ export async function getApp(): Promise<express.Express> {
       if (!userMobile) return res.status(401).json({ error: 'Login required.' });
       await applyPermanentExpenses(userMobile);
       const result = await pool.query(
-        `SELECT id,title,category,amount,payment_mode,active,start_date,created_at
+        `SELECT id,title,description,notes,category,amount,payment_mode,active,start_date,end_date,
+           CASE WHEN end_date IS NULL THEN NULL ELSE end_date-start_date+1 END AS duration_days,created_at
          FROM permanent_expenses WHERE user_mobile=$1 ORDER BY active DESC,created_at DESC`,
         [userMobile]
       );
@@ -3563,22 +3576,66 @@ export async function getApp(): Promise<express.Express> {
       const userMobile = getUserMobile(req);
       if (!userMobile) return res.status(401).json({ error: 'Login required.' });
       const title = String(req.body?.title || '').trim();
+      const description = String(req.body?.description || '').trim();
+      const notes = String(req.body?.notes || '').trim();
       const category = String(req.body?.category || '').trim();
       const amount = Number(req.body?.amount);
+      const durationDays = req.body?.duration_days === null || req.body?.duration_days === undefined || req.body?.duration_days === ''
+        ? null
+        : Number(req.body.duration_days);
+      const paymentMode = String(req.body?.payment_mode || 'CASH').trim().toUpperCase();
       if (!title) return res.status(400).json({ error: 'Expense name is required.' });
       if (!category) return res.status(400).json({ error: 'Expense category is required.' });
       if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Expense amount must be greater than zero.' });
+      if (durationDays !== null && ![7, 14].includes(durationDays)) return res.status(400).json({ error: 'Choose a duration of one week, two weeks, or permanent.' });
+      if (!['CASH', 'CHEQUE', 'CHECK', 'BANK', 'UPI', 'ONLINE'].includes(paymentMode)) return res.status(400).json({ error: 'Choose a valid payment mode.' });
       const id = `PERM-${crypto.randomUUID()}`;
       const result = await pool.query(
-        `INSERT INTO permanent_expenses (id,user_mobile,title,category,amount,payment_mode,active,start_date,created_at)
-         VALUES ($1,$2,$3,$4,$5,'CASH',TRUE,CURRENT_DATE,NOW())
-         RETURNING id,title,category,amount,payment_mode,active,start_date,created_at`,
-        [id, userMobile, title, category, amount]
+        `INSERT INTO permanent_expenses (id,user_mobile,title,description,notes,category,amount,payment_mode,active,start_date,end_date,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,CURRENT_DATE,CASE WHEN $9::int IS NULL THEN NULL ELSE CURRENT_DATE+($9::int-1) END,NOW())
+         RETURNING id,title,description,notes,category,amount,payment_mode,active,start_date,end_date,
+           CASE WHEN end_date IS NULL THEN NULL ELSE end_date-start_date+1 END AS duration_days,created_at`,
+        [id, userMobile, title, description, notes, category, amount, paymentMode, durationDays]
       );
       await applyPermanentExpenses(userMobile);
       res.status(201).json({ success: true, expense: result.rows[0] });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Unable to save permanent expense.' });
+    }
+  });
+
+  app.put('/api/permanent-expenses/:id', async (req: Request, res: Response) => {
+    try {
+      const userMobile = getUserMobile(req);
+      if (!userMobile) return res.status(401).json({ error: 'Login required.' });
+      const title = String(req.body?.title || '').trim();
+      const description = String(req.body?.description || '').trim();
+      const notes = String(req.body?.notes || '').trim();
+      const category = String(req.body?.category || '').trim();
+      const amount = Number(req.body?.amount);
+      const durationDays = req.body?.duration_days === null || req.body?.duration_days === undefined || req.body?.duration_days === ''
+        ? null
+        : Number(req.body.duration_days);
+      const paymentMode = String(req.body?.payment_mode || 'CASH').trim().toUpperCase();
+      if (!title || !category) return res.status(400).json({ error: 'Expense name and category are required.' });
+      if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Expense amount must be greater than zero.' });
+      if (durationDays !== null && ![7, 14].includes(durationDays)) return res.status(400).json({ error: 'Choose a duration of one week, two weeks, or permanent.' });
+      if (!['CASH', 'CHEQUE', 'CHECK', 'BANK', 'UPI', 'ONLINE'].includes(paymentMode)) return res.status(400).json({ error: 'Choose a valid payment mode.' });
+      const result = await pool.query(
+        `UPDATE permanent_expenses
+         SET title=$1,description=$2,notes=$3,category=$4,amount=$5,payment_mode=$6,active=TRUE,
+             start_date=CURRENT_DATE,
+           end_date=CASE WHEN $7::int IS NULL THEN NULL ELSE CURRENT_DATE+($7::int-1) END
+         WHERE id=$8 AND user_mobile=$9
+         RETURNING id,title,description,notes,category,amount,payment_mode,active,start_date,end_date,
+           CASE WHEN end_date IS NULL THEN NULL ELSE end_date-start_date+1 END AS duration_days,created_at`,
+        [title, description, notes, category, amount, paymentMode, durationDays, req.params.id, userMobile]
+      );
+      if (!result.rowCount) return res.status(404).json({ error: 'Permanent expense not found.' });
+      await applyPermanentExpenses(userMobile);
+      res.json({ success: true, expense: result.rows[0] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Unable to update permanent expense.' });
     }
   });
 
